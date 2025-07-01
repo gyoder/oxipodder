@@ -4,6 +4,7 @@ use opml::OPML;
 use reqwest::blocking::Client;
 use rss::Channel;
 use serde::{Deserialize, Serialize};
+use serde_json::to_string_pretty;
 use url::Url;
 
 
@@ -45,17 +46,32 @@ pub struct Enclosure {
 impl PodderDB {
     pub fn create_from_opml(opml: OPML) -> Result<PodderDB>{
         let mut db = PodderDB::default();
-        for out in opml.body.outlines {
-            db.podcasts.push(Podcast {
-                title: out.title.context("Missing Title")?,
-                description: out.description,
-                auto_download_limit: Some(5),
-                xml_url: Url::parse(out.xml_url.context("Missing RSS Url")?.as_str())?,
-                html_url: out.html_url.map(|u| Url::parse(&u).ok()).unwrap_or_default(),
-                episodes: Vec::new(),
-                last_refreshed: DateTime::default()
-            });
+        for out in &opml.body.outlines.first().unwrap().outlines {
+            println!("{out:?}");
+            let podcast_result = (|| -> Result<Podcast> {
+                Ok(Podcast {
+                    title: out.title.clone().context("Missing Title")?,
+                    description: out.description.clone(),
+                    auto_download_limit: Some(5),
+                    xml_url: Url::parse(out.xml_url.clone().context("Missing RSS Url")?.as_str())?,
+                    html_url: out.html_url.clone().and_then(|u| Url::parse(&u).ok()),
+                    episodes: Vec::new(),
+                    last_refreshed: Utc::now()
+                })
+            })();
+
+            match podcast_result {
+                Ok(podcast) => {
+                    println!("Successfully added podcast: {}", podcast.title);
+                    db.podcasts.push(podcast);
+                }
+                Err(e) => {
+                    eprintln!("Error processing podcast outline: {}", e);
+                }
+            }
         }
+
+        println!("{}", to_string_pretty(&db).unwrap_or_default());
 
 
         Ok(db)
@@ -65,11 +81,17 @@ impl PodderDB {
         let client = Client::new();
         for pod in &mut self.podcasts {
             let content = client.get(pod.xml_url.clone()).send()?.bytes()?;
-            let channel = Channel::read_from(&content[..])?;
+            let channel = match Channel::read_from(&content[..]) {
+                Ok(it) => it,
+                Err(e) => {
+                    println!("Skipping Podcast: {e}");
+                    continue;
+                },
+            };
             for item in channel.items {
                 let guid = item.guid.map(|i| i.value).unwrap_or_default();
                 let enclosure = item.enclosure.unwrap_or_default();
-                if pod.episodes.iter().any(|e| e.guid == guid) {
+                if !pod.episodes.iter().any(|e| e.guid == guid) {
                     pod.episodes.push(Episode {
                         guid,
                         title: item.title.unwrap_or_default(),

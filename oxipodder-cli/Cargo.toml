@@ -4,5 +4,10 @@ version = "0.0.0"
 edition = "2024"
 
 [dependencies]
+oxipodder-backend = { path = "../oxipodder-backend" }
+anyhow = "1.0.98"
 clap = { version = "4.5.40", features = ["derive"] }
+opml = "1.1.6"
 reqwest = "0.12.21"
+url = "2.5.4"
+serde_json = "1.0.140"

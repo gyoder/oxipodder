@@ -1024,8 +1024,13 @@ dependencies = [
 name = "oxipodder-cli"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "clap",
+ "opml",
+ "oxipodder-backend",
  "reqwest",
+ "serde_json",
+ "url",
 ]
 
 [[package]]
