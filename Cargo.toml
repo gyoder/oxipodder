@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "oxipodder-backend",
+    "oxipodder-cli",
+]
+resolver = "3"

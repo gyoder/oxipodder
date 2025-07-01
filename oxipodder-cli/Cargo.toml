@@ -1,0 +1,8 @@
+[package]
+name = "oxipodder-cli"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.40", features = ["derive"] }
+reqwest = "0.12.21"
