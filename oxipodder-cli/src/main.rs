@@ -1,12 +1,19 @@
+mod download_view;
+
 use anyhow::{Context, Result};
+use download_view::create_download_view;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use clap::{Arg, Command};
 use opml::OPML;
+use oxipodder_backend::downloader::{create_downloader, DownloadMessage, DownloadQueueElement};
 use oxipodder_backend::process_podcasts;
 use oxipodder_backend::types::PodderDB;
 use reqwest::blocking::Client;
+use reqwest::IntoUrl;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::io::Write;
+use std::str::FromStr;
 use url::Url;
 
 fn main() -> Result<()> {
@@ -220,13 +227,14 @@ fn update_podderdb(path: &str, should_download: bool) -> Result<()> {
         println!("Downloading new episodes...");
         download_episodes_from_db(&mut podder_db, &podcasts_dir, episodes_count)?;
 
-        // Save database again with download status
-        let final_db_content = serde_json::to_string_pretty(&podder_db)
-            .context("Failed to serialize final database")?;
-
-        fs::write(base_path.join("podder_db.json"), final_db_content)
-            .context("Failed to save final database")?;
     }
+
+    let final_db_content = serde_json::to_string_pretty(&podder_db)
+        .context("Failed to serialize final database")?;
+
+    fs::write(base_path.join("podder_db.json"), final_db_content)
+        .context("Failed to save final database")?;
+
 
     Ok(())
 }
@@ -267,9 +275,11 @@ fn download_episodes_from_db(
 ) -> Result<()> {
     // TODO: do async downloading
     let client = Client::new();
-
+    let mut display_name: Vec<String> = Vec::new();
+    let mut download_list: Vec<DownloadQueueElement> = Vec::new();
+    let mut count: u32 = 0;
     for podcast in &mut podder_db.podcasts {
-        let dir_name = sanitize_filename(&podcast.title);
+        let dir_name = podcast.filename();
         let podcast_dir = podcasts_dir.join(&dir_name);
 
         fs::create_dir_all(&podcast_dir)
@@ -283,29 +293,31 @@ fn download_episodes_from_db(
             .take(episodes_count);
 
         for episode in episodes_to_download {
-            let episode_filename = format!("{}.mp3", sanitize_filename(&episode.title));
-            let episode_path = podcast_dir.join(&episode_filename);
+            let episode_path = podcast_dir.join(episode.filename());
 
             if episode_path.exists() {
                 episode.downloaded_on_last_sync = true;
                 continue;
             }
 
-            println!("Downloading: {} - {}", podcast.title, episode.title);
-
-            match download_episode(&client, &episode.enclosure.url, &episode_path) {
-                Ok(_) => {
-                    episode.downloaded_on_last_sync = true;
-                    println!("✓ Downloaded: {}", episode.title);
-                }
-                Err(e) => {
-                    eprintln!("✗ Failed to download {}: {}", episode.title, e);
-                }
-            }
+            display_name.push(format!("{} - {}", podcast.title, episode.title));
+            download_list.push(DownloadQueueElement {
+                name: episode.title.clone(),
+                id: count,
+                url: Url::from_str(&episode.enclosure.url).unwrap(),
+                location: episode_path,
+                pub_date: episode.pub_date
+            });
+            count += 1;
         }
 
-        println!("Completed downloads for: {}", podcast.title);
+
     }
+    let (rx, handles) = create_downloader(download_list, 16).unwrap();
+
+    create_download_view(rx, handles, display_name);
+
+    println!("Downloaded Episodes");
 
     Ok(())
 }

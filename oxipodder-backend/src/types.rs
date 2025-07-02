@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
 use url::Url;
 
+use crate::helpers::sanitize_filename;
+
 
 
 #[derive(Serialize, Deserialize, Default)]
@@ -41,6 +43,14 @@ pub struct Enclosure {
     pub url: String,
     pub length: i32,
     pub mime_type: String
+}
+
+impl Episode {
+    pub fn filename(&self) -> String {format!("{}.mp3", sanitize_filename(&self.title))}
+}
+
+impl Podcast {
+    pub fn filename(&self) -> String {format!("{}", sanitize_filename(&self.title))}
 }
 
 impl PodderDB {
