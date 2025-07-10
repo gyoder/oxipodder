@@ -1,8 +1,9 @@
-use std::{fs::File, io::{Read, Write}, path::{Path, PathBuf}, sync::{mpsc, Arc}, thread::{self, JoinHandle}};
+use std::{any::Any, fs::{remove_file, File}, io::{Read, Write}, path::{Path, PathBuf}, process::Stdio, str::FromStr, sync::{mpsc, Arc}, thread::{self, JoinHandle}};
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use crossbeam::{channel::{unbounded, Receiver}, queue::ArrayQueue};
+use ez_ffmpeg::FfmpegContext;
 use filetime::{set_file_atime, set_file_times, FileTime};
 use reqwest::blocking::Response;
 use url::Url;
@@ -48,14 +49,13 @@ pub fn create_downloader(download_list: Vec<DownloadQueueElement>, threads: i32)
     let (tx, rx) = unbounded::<DownloadMessage>();
     let mut handles: Vec<JoinHandle<()>> = Vec::new();
 
-    for i in 0..threads {
+    for _ in 0..threads {
         let download_queue = download_queue.clone();
         let tx = tx.clone();
         let handle = thread::spawn(move || {
             let client = create_reqwest_client().unwrap();
             while let Some(e) = download_queue.pop() {
-                let name = Arc::new(e.name);
-                let mut response: Response = match client.get(e.url).send() {
+                let mut response: Response = match client.get(e.url.clone()).send() {
                     Ok(res) => res,
                     Err(e) => {
                         tx.send(DownloadMessage::Failed(e.to_string())).unwrap(); //TODO: handle
@@ -63,19 +63,46 @@ pub fn create_downloader(download_list: Vec<DownloadQueueElement>, threads: i32)
                     },
                 };
 
+                let is_mp3 = e.url.path().ends_with("mp3");
+
                 let total_size = response.content_length().unwrap_or_default();
                 let mut completed: u64 = 0;
-                let mut file = File::create(&e.location).unwrap();
+                let dl_path = if is_mp3 {e.location.clone()} else {PathBuf::from_str(&format!("/tmp/oxi_{}", e.id)).unwrap()};
+                let mut file = File::create(&dl_path).unwrap();
                 let mut buf = [0; 8192];
 
                 tx.send(DownloadMessage::Started(DownloadProgress::new(e.id, total_size, completed))).unwrap();
+                let i = 0;
                 while let Ok(bytes_read) = response.read(&mut buf) {
                     if bytes_read == 0 {break;}
 
                     file.write_all(&buf[..bytes_read]).unwrap();
                     completed += bytes_read as u64;
-                    tx.send(DownloadMessage::Incremental(DownloadProgress::new(e.id, total_size, completed))).unwrap();
+                    if i % 10 == 0 {
+                        tx.send(DownloadMessage::Incremental(DownloadProgress::new(e.id, total_size, completed))).unwrap();
+                    }
                 }
+
+                if !is_mp3 {
+                    let status = std::process::Command::new("ffmpeg")
+                        .args(&[
+                            "-y",
+                            "-i", dl_path.to_str().unwrap_or_default(),
+                            e.location.to_str().unwrap_or_default(),
+                        ])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+
+                    match status {
+                        Ok(s) if s.success() => {},
+                        _ => {
+                            tx.send(DownloadMessage::Failed("Failed to Transcode".to_string())).unwrap();
+                        }
+                    }
+                    let _ = remove_file(dl_path);
+                }
+
                 let unix = FileTime::from_unix_time(e.pub_date.timestamp(), 0);
                 set_file_times(e.location, unix, unix).unwrap();
 

@@ -289,8 +289,8 @@ fn download_episodes_from_db(
 
         let episodes_to_download = podcast.episodes
             .iter_mut()
-            .filter(|e| !e.downloaded_on_last_sync && !e.listened_to)
-            .take(episodes_count);
+            .take(episodes_count)
+            .filter(|e| !e.downloaded_on_last_sync && !e.listened_to);
 
         for episode in episodes_to_download {
             let episode_path = podcast_dir.join(episode.filename());
@@ -313,9 +313,13 @@ fn download_episodes_from_db(
 
 
     }
+    if download_list.len() == 0 {
+        println!("None to download");
+        return Ok(());
+    }
     let (rx, handles) = create_downloader(download_list, 16).unwrap();
 
-    create_download_view(rx, handles, display_name);
+    create_download_view(rx, handles, display_name).unwrap();
 
     println!("Downloaded Episodes");
 
