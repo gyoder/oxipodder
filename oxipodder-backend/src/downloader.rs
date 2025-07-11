@@ -3,7 +3,6 @@ use std::{any::Any, fs::{remove_file, File}, io::{Read, Write}, path::{Path, Pat
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use crossbeam::{channel::{unbounded, Receiver}, queue::ArrayQueue};
-use ez_ffmpeg::FfmpegContext;
 use filetime::{set_file_atime, set_file_times, FileTime};
 use reqwest::blocking::Response;
 use url::Url;

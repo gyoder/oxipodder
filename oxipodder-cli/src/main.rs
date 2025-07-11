@@ -176,7 +176,7 @@ fn create_podderdb_from_opml(
 
     // Create directories for each podcast
     for podcast in &podder_db.podcasts {
-        let dir_name = sanitize_filename(&podcast.title);
+        let dir_name = podcast.filename();
         let podcast_dir = podcasts_dir.join(&dir_name);
 
         fs::create_dir_all(&podcast_dir)
@@ -287,18 +287,18 @@ fn download_episodes_from_db(
 
         podcast.episodes.sort_by(|a, b| b.pub_date.cmp(&a.pub_date));
 
-        let episodes_to_download = podcast.episodes
+        let mut episodes_to_download = podcast.episodes
             .iter_mut()
             .take(episodes_count)
             .filter(|e| !e.downloaded_on_last_sync && !e.listened_to);
 
-        for episode in episodes_to_download {
+        for episode in &mut episodes_to_download {
             let episode_path = podcast_dir.join(episode.filename());
 
             if episode_path.exists() {
-                episode.downloaded_on_last_sync = true;
                 continue;
             }
+            episode.downloaded_on_last_sync = true;
 
             display_name.push(format!("{} - {}", podcast.title, episode.title));
             download_list.push(DownloadQueueElement {
@@ -324,37 +324,4 @@ fn download_episodes_from_db(
     println!("Downloaded Episodes");
 
     Ok(())
-}
-
-fn download_episode(client: &Client, url: &str, output_path: &Path) -> Result<()> {
-    let response = client.get(url)
-        .send()
-        .context("Failed to send download request")?;
-
-    if !response.status().is_success() {
-        return Err(anyhow::anyhow!("Download failed with status: {}", response.status()));
-    }
-
-    let mut file = fs::File::create(output_path)
-        .with_context(|| format!("Failed to create file: {:?}", output_path))?;
-
-    let content = response.bytes()
-        .context("Failed to read response content")?;
-
-    file.write_all(&content)
-        .context("Failed to write episode content to file")?;
-
-    Ok(())
-}
-
-fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            c if c.is_control() => '_',
-            c => c,
-        })
-        .collect::<String>()
-        .trim()
-        .to_string()
 }
