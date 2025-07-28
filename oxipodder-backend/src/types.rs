@@ -13,7 +13,10 @@ use crate::helpers::sanitize_filename;
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct PodderDB {
-    pub podcasts: Vec<Podcast>
+    #[serde(default)]
+    pub podcasts: Vec<Podcast>,
+    #[serde(default)]
+    pub youtube_playlists: Vec<YoutubePlaylist>
 }
 
 #[derive(Serialize, Deserialize)]
@@ -45,11 +48,22 @@ pub struct Enclosure {
     pub mime_type: String
 }
 
+
+#[derive(Serialize, Deserialize)]
+pub struct YoutubePlaylist {
+    pub title: String,
+    pub url: String,
+}
+
 impl Episode {
     pub fn filename(&self) -> String {format!("{}.mp3", sanitize_filename(&self.title))}
 }
 
 impl Podcast {
+    pub fn filename(&self) -> String {format!("{}", sanitize_filename(&self.title))}
+}
+
+impl YoutubePlaylist {
     pub fn filename(&self) -> String {format!("{}", sanitize_filename(&self.title))}
 }
 
@@ -123,3 +137,4 @@ impl PodderDB {
         Ok(())
     }
 }
+

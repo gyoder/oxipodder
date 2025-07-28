@@ -6,8 +6,8 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use clap::{Arg, Command};
 use opml::OPML;
 use oxipodder_backend::downloader::{create_downloader, DownloadMessage, DownloadQueueElement};
-use oxipodder_backend::process_podcasts;
-use oxipodder_backend::types::PodderDB;
+use oxipodder_backend::{download_youtube_playlists, process_podcasts, read_podder_db, save_podder_db};
+use oxipodder_backend::types::{Podcast, PodderDB, YoutubePlaylist};
 use reqwest::blocking::Client;
 use reqwest::IntoUrl;
 use std::fs;
@@ -96,6 +96,83 @@ fn main() -> Result<()> {
                         .default_value("5"),
                 ),
         )
+        .subcommand(
+            Command::new("download-one")
+                .about("Download episode for one podcast from existing database")
+                .arg(
+                    Arg::new("podcast")
+                        .long("podcast")
+                        .short('c')
+                        .value_name("NUM")
+                        .help("Index of podcast seen in oxipodder list")
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .short('p')
+                        .value_name("DIR")
+                        .help("Path to podcast database directory")
+                        .default_value("."),
+                )
+                .arg(
+                    Arg::new("episodes")
+                        .long("episodes")
+                        .short('e')
+                        .value_name("NUMBER")
+                        .help("Number of episodes to download per podcast")
+                        .default_value("1000"),
+                ),
+        )
+        .subcommand(
+            Command::new("list")
+                .about("List podcasts from existing database")
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .short('p')
+                        .value_name("DIR")
+                        .help("Path to podcast database directory")
+                        .default_value("."),
+                )
+        )
+        .subcommand(
+            Command::new("yt-add")
+            .about("Add a YouTube Playlist to existing database")
+            .arg(
+                Arg::new("path")
+                .long("path")
+                .short('p')
+                .value_name("DIR")
+                .help("Path to podcast database directory")
+                .default_value("."),
+            )
+            .arg(
+                Arg::new("url")
+                .long("url")
+                .short('u')
+                .value_name("URL")
+                .help("URL of playlist")
+            )
+            .arg(
+                Arg::new("name")
+                .long("name")
+                .short('n')
+                .value_name("NAME")
+                .help("Name of playlist")
+            )
+        )
+        .subcommand(
+            Command::new("yt-download")
+                .about("Download YouTube Playlists")
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .short('p')
+                        .value_name("DIR")
+                        .help("Path to podcast database directory")
+                        .default_value("."),
+                )
+        )
         .get_matches();
 
     match matches.subcommand() {
@@ -131,10 +208,81 @@ fn main() -> Result<()> {
 
             download_episodes(path, episodes_count)?;
         }
+        Some(("download-one", sub_matches)) => {
+            let path = sub_matches.get_one::<String>("path").unwrap();
+            let episodes_count: usize = sub_matches
+                .get_one::<String>("episodes")
+                .unwrap()
+                .parse()
+                .context("Invalid episodes number")?;
+            let podcast: usize = sub_matches
+                .get_one::<String>("podcast")
+                .unwrap()
+                .parse()
+                .context("Invalid podcast number")?;
+
+
+            download_one_episodes(path, podcast, episodes_count)?;
+        }
+        Some(("list", sub_matches)) => {
+            let path = sub_matches.get_one::<String>("path").unwrap();
+            list_episodes(path)?;
+        }
+        Some(("yt-add", sub_matches)) => {
+            let path = sub_matches.get_one::<String>("path").unwrap();
+            let url = sub_matches.get_one::<String>("url").unwrap();
+            let name = sub_matches.get_one::<String>("name").unwrap();
+            add_youtube_playlist(path, name, url)?;
+        }
+        Some(("yt-download", sub_matches)) => {
+            let path = sub_matches.get_one::<String>("path").unwrap();
+            download_youtube(path)?;
+        }
         _ => {
             println!("No subcommand provided. Use --help for usage information.");
         }
+
     }
+
+    Ok(())
+}
+
+fn add_youtube_playlist(path: &str, name: &str, url: &str) -> Result<()> {
+    let mut podder_db = read_podder_db(path)?;
+    podder_db.youtube_playlists.push(YoutubePlaylist {
+        title: name.to_string(),
+        url: url.to_string(),
+    });
+    save_podder_db(path, podder_db)?;
+    Ok(())
+}
+
+fn download_youtube(path: &str) -> Result<()> {
+    let mut podder_db = read_podder_db(path)?;
+    download_youtube_playlists(&mut podder_db, path)?;
+    save_podder_db(path, podder_db)?;
+    Ok(())
+}
+
+
+fn list_episodes(path: &str) -> Result<()> {
+    println!("Updating podcast database at: {}", path);
+
+    let base_path = Path::new(path);
+    let mut podder_db = process_podcasts(path)?;
+
+    println!("RSS feeds updated successfully!");
+
+    for (i, pod) in podder_db.podcasts.iter().enumerate() {
+        println!("{}: {}", i, pod.title);
+    }
+
+    let final_db_content = serde_json::to_string_pretty(&podder_db)
+        .context("Failed to serialize final database")?;
+
+    fs::write(base_path.join("podder_db.json"), final_db_content)
+        .context("Failed to save final database")?;
+
 
     Ok(())
 }
@@ -198,7 +346,7 @@ fn create_podderdb_from_opml(
     // Download episodes
     if episodes_count > 0 {
         println!("Downloading {} episodes per podcast...", episodes_count);
-        download_episodes_from_db(&mut podder_db, &podcasts_dir, episodes_count)?;
+        download_episodes_from_db(&mut podder_db, &podcasts_dir, episodes_count, None)?;
 
         // Save updated database with download status
         let updated_db_content = serde_json::to_string_pretty(&podder_db)
@@ -225,7 +373,7 @@ fn update_podderdb(path: &str, should_download: bool) -> Result<()> {
         let episodes_count = 5; // Default download count
 
         println!("Downloading new episodes...");
-        download_episodes_from_db(&mut podder_db, &podcasts_dir, episodes_count)?;
+        download_episodes_from_db(&mut podder_db, &podcasts_dir, episodes_count, None)?;
 
     }
 
@@ -257,7 +405,7 @@ fn download_episodes(path: &str, episodes_count: usize) -> Result<()> {
 
     let podcasts_dir = base_path.join("podcasts");
 
-    download_episodes_from_db(&mut podder_db, &podcasts_dir, episodes_count)?;
+    download_episodes_from_db(&mut podder_db, &podcasts_dir, episodes_count, None)?;
 
     let updated_db_content = serde_json::to_string_pretty(&podder_db)
         .context("Failed to serialize updated database")?;
@@ -268,17 +416,56 @@ fn download_episodes(path: &str, episodes_count: usize) -> Result<()> {
     Ok(())
 }
 
+
+fn download_one_episodes(path: &str, podcast: usize, episodes_count: usize) -> Result<()> {
+    println!("Downloading episodes from database at: {}", path);
+
+    let base_path = Path::new(path);
+    let db_file_path = base_path.join("podder_db.json");
+
+    if !db_file_path.exists() {
+        return Err(anyhow::anyhow!("podder_db.json not found at {:?}", db_file_path));
+    }
+
+    let db_content = fs::read_to_string(&db_file_path)
+        .context("Failed to read podder_db.json")?;
+
+    let mut podder_db: PodderDB = serde_json::from_str(&db_content)
+        .context("Failed to parse podder_db.json")?;
+
+    let podcasts_dir = base_path.join("podcasts");
+
+    download_episodes_from_db(&mut podder_db, &podcasts_dir, episodes_count, Some(podcast))?;
+
+    let updated_db_content = serde_json::to_string_pretty(&podder_db)
+        .context("Failed to serialize updated database")?;
+
+    fs::write(&db_file_path, updated_db_content)
+        .context("Failed to save updated database")?;
+
+    Ok(())
+}
+
+
+
 fn download_episodes_from_db(
     podder_db: &mut PodderDB,
     podcasts_dir: &Path,
     episodes_count: usize,
+    podcast_index: Option<usize>
 ) -> Result<()> {
     // TODO: do async downloading
     let client = Client::new();
     let mut display_name: Vec<String> = Vec::new();
     let mut download_list: Vec<DownloadQueueElement> = Vec::new();
     let mut count: u32 = 0;
-    for podcast in &mut podder_db.podcasts {
+    let mut podcasts_to_search: Vec<&mut Podcast> = podder_db.podcasts.iter_mut().enumerate().filter_map(|(i, p)| {
+        match podcast_index {
+            Some(pi) => if i == pi {Some(p)} else {None},
+            None => Some(p),
+        }
+    }).collect();
+    for podcast in &mut podcasts_to_search {
         let dir_name = podcast.filename();
         let podcast_dir = podcasts_dir.join(&dir_name);
 
