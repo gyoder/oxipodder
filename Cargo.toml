@@ -1,6 +1,44 @@
-[workspace]
-members = [
-    "oxipodder-backend",
-    "oxipodder-cli",
-]
-resolver = "3"
+[package]
+name = "oxipodder"
+version = "0.1.0"
+edition = "2024"
+description = "A fast and simple podcast downloader"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/oxipodder"
+
+[[bin]]
+name = "oxipodder"
+path = "src/main.rs"
+
+[dependencies]
+# Core functionality
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+url = { version = "2.5", features = ["serde"] }
+
+# RSS and OPML parsing
+rss = "2.0"
+opml = "1.1"
+
+# Date/time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# CLI interface
+clap = { version = "4.5", features = ["derive"] }
+
+# Progress indication
+indicatif = "0.17"
+
+# File operations
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
+
+# Utility
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# File timestamps
+filetime = "0.2"
