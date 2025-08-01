@@ -37,6 +37,15 @@ enum Commands {
         #[arg(short, long, default_value = "5")]
         episodes: usize,
     },
+    /// Add RSS feed to existing database
+    Add {
+        /// Path to podcast database directory
+        #[arg(short, long, default_value = ".")]
+        path: String,
+        /// URL of RSS feed
+        #[arg(short, long)]
+        url: String,
+    },
     /// Update existing podcast database
     Update {
         /// Path to podcast database directory
@@ -188,6 +197,72 @@ impl PodderDB {
         }
 
         Ok(db)
+    }
+
+    async fn add_feed(&mut self, url: &str) -> Result<()> {
+        let parsed_url = Url::parse(url)
+            .with_context(|| format!("Invalid URL: {}", url))?;
+
+        // Check if podcast already exists
+        if self.podcasts.iter().any(|p| p.xml_url == parsed_url) {
+            return Err(anyhow::anyhow!("Podcast with URL '{}' already exists", url));
+        }
+
+        let client = reqwest::Client::new();
+
+        println!("Fetching RSS feed from: {}", url);
+        let response = client.get(parsed_url.clone()).send().await
+            .with_context(|| format!("Failed to fetch RSS feed from: {}", url))?;
+
+        let content = response.bytes().await
+            .context("Failed to read RSS feed content")?;
+
+        let channel = rss::Channel::read_from(&content[..])
+            .context("Failed to parse RSS feed")?;
+
+        let mut podcast = Podcast {
+            title: channel.title,
+            description: Some(channel.description),
+            xml_url: parsed_url,
+            html_url: Url::parse(&channel.link).ok(),
+            auto_download_limit: Some(5),
+            episodes: Vec::new(),
+            last_refreshed: Utc::now(),
+        };
+
+        // Add episodes from the RSS feed
+        for item in channel.items {
+            let guid = item.guid
+                .map(|g| g.value)
+                .unwrap_or_else(|| item.title.clone().unwrap_or_default());
+
+            if let Some(enclosure) = item.enclosure {
+                let episode = Episode {
+                    guid,
+                    title: item.title.unwrap_or_default(),
+                    enclosure: Enclosure {
+                        url: enclosure.url,
+                        length: enclosure.length.parse().unwrap_or(0),
+                        mime_type: enclosure.mime_type,
+                    },
+                    pub_date: item.pub_date
+                        .and_then(|d| DateTime::parse_from_rfc2822(&d).ok())
+                        .map(|d| d.into())
+                        .unwrap_or_else(Utc::now),
+                        downloaded_on_last_sync: false,
+                        listened_to: false,
+                };
+                podcast.episodes.push(episode);
+            }
+        }
+
+        // Sort episodes by publication date (newest first)
+        podcast.episodes.sort_by(|a, b| b.pub_date.cmp(&a.pub_date));
+
+        println!("Added podcast: {} ({} episodes)", podcast.title, podcast.episodes.len());
+        self.podcasts.push(podcast);
+
+        Ok(())
     }
 
     async fn update_feeds(&mut self) -> Result<()> {
@@ -445,6 +520,21 @@ async fn create_command(opml: String, output: String, episodes: usize) -> Result
     Ok(())
 }
 
+async fn add_command(path: String, url: String) -> Result<()> {
+    let base_path = Path::new(&path);
+    let mut db = PodderDB::load(base_path)
+        .with_context(|| format!("Failed to load database from path: {}", path))?;
+
+    db.add_feed(&url).await
+        .with_context(|| format!("Failed to add RSS feed: {}", url))?;
+
+    db.save(base_path)
+        .context("Failed to save updated database")?;
+
+    println!("RSS feed added successfully!");
+    Ok(())
+}
+
 async fn update_command(path: String, download: bool) -> Result<()> {
     let base_path = Path::new(&path);
     let mut db = PodderDB::load(base_path)?;
@@ -583,6 +673,9 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Create { opml, output, episodes } => {
             create_command(opml, output, episodes).await?;
+        }
+        Commands::Add { path, url } => {
+            add_command(path, url).await?;
         }
         Commands::Update { path, download } => {
             update_command(path, download).await?;
