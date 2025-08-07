@@ -3,8 +3,7 @@ use clap::Parser;
 
 mod cli;
 mod database;
-mod downloader;
-mod ffprobe;
+mod ffmpeg;
 mod models;
 mod utils;
 

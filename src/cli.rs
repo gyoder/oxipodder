@@ -1,16 +1,18 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
+use futures::future::join_all;
+use tokio::task::JoinHandle;
+use url::Url;
 use std::{fs, path::Path};
 
-use crate::downloader::{download_episodes, download_episodes_filtered};
-use crate::models::PodderDB;
+use crate::models::{Content, DownloadMessages, DownloadQueueElement, Library, PodderDB};
 use crate::models::YoutubePlaylist;
 
 #[derive(Subcommand)]
 pub enum Commands {
     Create {
         #[arg(short, long)]
-        opml: String,
+        opml: Option<String>,
         #[arg(short = 'O', long, default_value = ".")]
         output: String,
         #[arg(short, long, default_value = "5")]
@@ -60,25 +62,26 @@ pub enum Commands {
     },
 }
 
-pub async fn create_command(opml: String, output: String, episodes: usize) -> Result<()> {
-    println!("Creating podcast database from OPML: {}", opml);
+pub async fn create_command(opml: Option<String>, output: String, episodes: usize) -> Result<()> {
+    println!("Creating podcast database", );
 
-    let mut db = PodderDB::from_opml(&opml).await?;
+    // let mut db = PodderDB::from_opml(&opml).await?;
+    let mut db = PodderDB::default();
     let output_path = Path::new(&output);
 
     fs::create_dir_all(output_path)?;
 
-    println!("Updating RSS feeds...");
-    db.update_feeds().await?;
+    // println!("Updating RSS feeds...");
+    // db.update_feeds().await?;
 
     db.save(output_path)?;
     println!("Database created with {} podcasts", db.podcasts.len());
 
-    if episodes > 0 {
-        println!("Downloading {} episodes per podcast...", episodes);
-        download_episodes(&mut db, output_path, episodes).await?;
-        db.save(output_path)?;
-    }
+    // if episodes > 0 {
+    //     println!("Downloading {} episodes per podcast...", episodes);
+    //     download_episodes(&mut db, output_path, episodes).await?;
+    //     db.save(output_path)?;
+    // }
 
     println!("Setup complete!");
     Ok(())
@@ -88,9 +91,11 @@ pub async fn add_command(path: String, url: String) -> Result<()> {
     let base_path = Path::new(&path);
     let mut db = load_db(base_path, &path)?;
 
-    db.add_feed(&url)
+    let (title, count) = db.podcasts.add_from_url(Url::parse(&url)?)
         .await
         .with_context(|| format!("Failed to add RSS feed: {}", url))?;
+
+    println!("Successfully added podcast {title}: {count} episodes");
 
     db.save(base_path)?;
     println!("RSS feed added successfully!");
@@ -102,9 +107,17 @@ pub async fn update_command(path: String, download: bool) -> Result<()> {
     let mut db = load_db(base_path, &path)?;
 
     println!("Updating RSS feeds...");
-    db.update_feeds().await?;
+    let new = db.podcasts.update_all(&base_path.to_path_buf()).await;
+    println!("Successfuly updated podcasts");
+    for n in new {
+        if !n.new_content.is_empty() {
+            println!("New podcasts from {}", n.collection);
+            for title in n.new_content {
+                println!("\t{title}");
+            }
+        }
+    }
 
-    db.update_played_statuses(base_path);
 
     if download {
         println!("Downloading new episodes...");
@@ -160,7 +173,7 @@ pub async fn list_command(path: String) -> Result<()> {
         let unheard_count = podcast
             .episodes
             .iter()
-            .filter(|e| !e.downloaded_on_last_sync && !e.listened_to)
+            .filter(|e| !e.listened_to)
             .count();
         println!(
             "{}: {} ({} unheard episodes)",
@@ -180,13 +193,14 @@ pub async fn list_command(path: String) -> Result<()> {
 }
 
 pub async fn yt_add_command(path: String, url: String, name: String) -> Result<()> {
+    todo!();
     let base_path = Path::new(&path);
     let mut db = load_db(base_path, &path)?;
 
-    db.youtube_playlists.push(YoutubePlaylist {
-        title: name.clone(),
-        url: url.clone(),
-    });
+    // db.youtube_playlists.push(YoutubePlaylist {
+    //     title: name.clone(),
+    //     url: url.clone(),
+    // });
 
     db.save(base_path)?;
     println!("Added YouTube playlist: {} ({})", name, url);
@@ -194,6 +208,7 @@ pub async fn yt_add_command(path: String, url: String, name: String) -> Result<(
 }
 
 pub async fn yt_download_command(path: String) -> Result<()> {
+    todo!();
     let base_path = Path::new(&path);
     let db = load_db(base_path, &path)?;
 
@@ -205,36 +220,36 @@ pub async fn yt_download_command(path: String) -> Result<()> {
     let youtube_dir = base_path.join("youtube_playlists");
     fs::create_dir_all(&youtube_dir)?;
 
-    for playlist in &db.youtube_playlists {
-        let playlist_dir = youtube_dir.join(playlist.safe_filename());
-        fs::create_dir_all(&playlist_dir)?;
-
-        println!("Downloading playlist: {}", playlist.title);
-
-        let status = tokio::process::Command::new("yt-dlp")
-            .args([
-                "-x",
-                "--audio-format",
-                "mp3",
-                "--embed-thumbnail",
-                "--add-metadata",
-            ])
-            .args(["-o", "%(playlist_index)s - %(title)s.%(ext)s"])
-            .arg(&playlist.url)
-            .args(["--download-archive", "downloaded.txt"])
-            .current_dir(&playlist_dir)
-            .status()
-            .await?;
-
-        if status.success() {
-            println!("Successfully downloaded playlist: {}", playlist.title);
-        } else {
-            eprintln!(
-                "yt-dlp failed for playlist '{}': {}",
-                playlist.title, status
-            );
-        }
-    }
+    // for playlist in &db.youtube_playlists {
+    //     let playlist_dir = youtube_dir.join(playlist.safe_filename());
+    //     fs::create_dir_all(&playlist_dir)?;
+    //
+    //     println!("Downloading playlist: {}", playlist.title);
+    //
+    //     let status = tokio::process::Command::new("yt-dlp")
+    //         .args([
+    //             "-x",
+    //             "--audio-format",
+    //             "mp3",
+    //             "--embed-thumbnail",
+    //             "--add-metadata",
+    //         ])
+    //         .args(["-o", "%(playlist_index)s - %(title)s.%(ext)s"])
+    //         .arg(&playlist.url)
+    //         .args(["--download-archive", "downloaded.txt"])
+    //         .current_dir(&playlist_dir)
+    //         .status()
+    //         .await?;
+    //
+    //     if status.success() {
+    //         println!("Successfully downloaded playlist: {}", playlist.title);
+    //     } else {
+    //         eprintln!(
+    //             "yt-dlp failed for playlist '{}': {}",
+    //             playlist.title, status
+    //         );
+    //     }
+    // }
 
     println!("YouTube download complete!");
     Ok(())
@@ -243,4 +258,30 @@ pub async fn yt_download_command(path: String) -> Result<()> {
 fn load_db(base_path: &Path, path: &str) -> Result<PodderDB> {
     PodderDB::load(base_path)
         .with_context(|| format!("Failed to load database from path: {}", path))
+}
+
+
+async fn download_screen<T: Content>(mut tasks: Vec<DownloadQueueElement<T>>) {
+    let (task_queue_tx, task_queue_rx) = flume::unbounded::<DownloadQueueElement<T>>();
+    while let Some(e) = tasks.pop() {
+        task_queue_tx.send(e).unwrap();
+    }
+    drop(task_queue_tx);
+
+    let (msg_tx, msg_rx) = flume::unbounded::<DownloadMessages>();
+
+    let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
+    for i in 0..1 {
+        let task_queue_rx = task_queue_rx.clone();
+        let msg_tx = msg_tx.clone();
+        handles.push(tokio::task::spawn(async move {
+            while let Ok(task) = task_queue_rx.recv_async().await {
+                // handle task
+            }
+        }));
+    }
+
+    join_all(handles).await;
+
 }
