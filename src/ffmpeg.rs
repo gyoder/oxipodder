@@ -317,12 +317,14 @@ pub fn transcode_command(input: &PathBuf, output: &PathBuf, opts: TranscodeOptio
             cmd.input(input.to_str().unwrap())
                 .args(["-codec:a", "libmp3lame"])
                 .args(["-q:a", "6"])
+                .args(["-progress", "pipe:2", "-nostats"])
                 .no_video()
                 .output(output.to_str().unwrap());
             cmd
         },
         TranscodeOptions::Copy => {
             cmd.input(input.to_str().unwrap())
+                .args(["-progress", "pipe:2", "-nostats"])
                 .codec_audio("copy")
                 .no_video()
                 .output(output.to_str().unwrap());
@@ -332,6 +334,7 @@ pub fn transcode_command(input: &PathBuf, output: &PathBuf, opts: TranscodeOptio
             cmd.input(input.to_str().unwrap())
                 .args(["-codec:a", "libmp3lame"])
                 .args(["-q:a", "0"])
+                .args(["-progress", "pipe:2", "-nostats"])
                 .no_video()
                 .output(output.to_str().unwrap());
             cmd

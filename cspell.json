@@ -6,6 +6,9 @@
     "ffprobe",
     "cuesheet",
     "replaygain",
-    "TXXX"
+    "TXXX",
+    "sqlx",
+    "oxipodder",
+    "indicatif"
   ]
 }
